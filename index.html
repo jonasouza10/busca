@@ -171,6 +171,12 @@
             const chatDisplay = document.getElementById('chat');
             const clearChatButton = document.getElementById('clearChatButton');
 
+            // Variável para armazenar o histórico da conversa com o LLM
+            let chatHistory = [];
+
+            // Variável para a chave da API (será fornecida em tempo de execução pelo Canvas)
+            const apiKey = ""; 
+
             // --- Função para cálculo de distância Levenshtein (para corretor básico) ---
             function levenshteinDistance(s1, s2) {
                 s1 = s1.toLowerCase();
@@ -269,30 +275,49 @@
                 chatDisplay.scrollTop = chatDisplay.scrollHeight;
 
                 try {
-                    // Chama a ferramenta google_search diretamente
-                    const response = await google_search.search(queries=[userQuery]);
+                    // Prepara o prompt para o modelo Gemini para que ele realize a busca
+                    const promptForGemini = `Por favor, pesquise no Google sobre "${userQuery}" e forneça um resumo dos resultados mais relevantes, incluindo o título, o snippet e a URL de até 3 fontes. Formate a resposta de forma clara e concisa.`;
+                    
+                    chatHistory.push({ role: "user", parts: [{ text: promptForGemini }] });
 
+                    const payload = { contents: chatHistory };
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        console.error('Erro da API:', errorData);
+                        addMessageToChat('PenseQuiz', 'Erro: Não foi possível obter resultados da busca. Tente novamente mais tarde.', null);
+                        chatHistory.pop(); // Remove a última entrada do usuário do histórico em caso de erro
+                        return;
+                    }
+
+                    const result = await response.json();
+                    let aiResponseText = "Não consegui encontrar resultados para sua busca no Google. Tente reformular sua pergunta.";
                     let searchResultsHtml = "";
-                    if (response && response.length > 0 && response[0].results && response[0].results.length > 0) {
-                        searchResultsHtml += `
-                            <div class="search-result-block">
-                                <h4>Resultados da busca por "${userQuery}"</h4>
-                        `;
-                        // Pega os 3 primeiros resultados para exibir
-                        for (let i = 0; i < Math.min(response[0].results.length, 3); i++) {
-                            const result = response[0].results[i];
-                            searchResultsHtml += `
-                                <div class="mb-2">
-                                    <a href="${result.url}" target="_blank" rel="noopener noreferrer" class="result-title hover:underline">${result.source_title || 'Link'}</a>
-                                    <div class="result-url">${result.url}</div>
-                                    <p class="result-snippet">${result.snippet || 'Nenhuma descrição disponível.'}</p>
-                                </div>
-                            `;
-                        }
-                        searchResultsHtml += `</div>`;
+
+                    if (result.candidates && result.candidates.length > 0 &&
+                        result.candidates[0].content && result.candidates[0].content.parts &&
+                        result.candidates[0].content.parts.length > 0) {
+                        aiResponseText = result.candidates[0].content.parts[0].text;
+                        chatHistory.push({ role: "model", parts: [{ text: aiResponseText }] });
+
+                        // A IA irá retornar o texto já formatado com os resultados,
+                        // então podemos exibi-lo diretamente.
+                        // Se a IA não formatar como HTML, podemos tentar extrair links e snippets.
+                        // Por simplicidade, assumimos que a IA formatará o texto de forma legível.
+                        searchResultsHtml = `<div class="search-result-block">${aiResponseText}</div>`;
                         addMessageToChat('PenseQuiz', suggestionText + 'Aqui estão os resultados da sua busca:', searchResultsHtml);
+
                     } else {
-                        addMessageToChat('PenseQuiz', suggestionText + 'Não consegui encontrar resultados para sua busca no Google. Tente reformular sua pergunta.', null);
+                        console.error("Estrutura de resposta inesperada da API:", result);
+                        chatHistory.pop(); // Remove a última entrada do usuário do histórico em caso de erro
+                        addMessageToChat('PenseQuiz', suggestionText + aiResponseText, null);
                     }
 
                 } catch (error) {
@@ -320,7 +345,7 @@
             // Função para limpar as buscas
             function clearChat() {
                 chatDisplay.innerHTML = '';
-                // Não é necessário limpar chatHistory aqui, pois não estamos usando para conversa persistente com LLM
+                chatHistory = []; // Limpa o histórico da conversa também
                 addMessageToChat('PenseQuiz', 'Histórico de buscas limpo. Como posso ajudar agora?');
             }
 
